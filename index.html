@@ -4505,10 +4505,8 @@ async function populateHotWatchlist() {
   const addAllRow = document.getElementById('hotAddAllRow');
   const addedMsg = document.getElementById('hotAddedMsg');
 
-  // Check for API key — either user-provided or server env var
-  const existingKey = getApiKey();
-  const serverKey = (_memKey === '__server__' || lsGet(LS_KEY) === '__server__');
-  if (!existingKey && !serverKey) {
+  // Check for API key — server env var OR user-provided
+  if (!hasValidKey()) {
     document.getElementById('apiKeyModalInput').value = '';
     document.getElementById('apiKeyModal').style.display = 'flex';
     window._pendingPopulate = true;
@@ -4528,7 +4526,7 @@ async function populateHotWatchlist() {
     const maxPlays = parseInt(document.getElementById('hotMaxPlays')?.value || '10');
     const uwKey = document.getElementById('uwApiKey')?.value?.trim() || '';
     const tickers = SCAN_UNIVERSES[universe] || SCAN_UNIVERSES['liquid_leaders'];
-    const sample = tickers.slice(0, 40);
+    const sample = tickers.slice(0, 25); // cap at 25 — keeps prompt short, fits timeout
 
     // ── Step 1: Price data ────────────────────────────────────────────────
     area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 1/3: Fetching live price data for ${sample.length} tickers…</div>`;
@@ -4706,12 +4704,10 @@ Exactly ${maxPlays} objects with this structure:
 
 Only include the JSON array. No other text.`;
 
-  const userKey = getApiKey();
-  const isServerKey = (_memKey === '__server__' || lsGet(LS_KEY) === '__server__');
-  if (!userKey && !isServerKey) throw new Error('No Anthropic API key set. Click ⚙ Settings and paste your key.');
+  if (!hasValidKey()) throw new Error('No Anthropic API key. Open ⚙ Settings and paste your key.');
 
-  // Call via Netlify serverless function — server uses env var key if no userKey sent
   const claudeHeaders = { 'Content-Type': 'application/json' };
+  const userKey = getApiKey();
   if (userKey) claudeHeaders['x-anthropic-key'] = userKey;
 
   const response = await fetch('/.netlify/functions/claude', {
@@ -4719,7 +4715,7 @@ Only include the JSON array. No other text.`;
     headers: claudeHeaders,
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
+      max_tokens: 1800,
       messages: [{ role: 'user', content: prompt }]
     })
   });
@@ -5070,27 +5066,26 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
 });
 
 
-  // ── API KEY PERSISTENCE (localStorage with memory fallback) ──────────────
+  // ── API KEY MANAGEMENT ────────────────────────────────────────────────────
   const LS_KEY = 'twu_anthropic_key';
-  let _memKey = ''; // in-memory fallback if localStorage blocked (Safari private mode)
+  window._serverHasKey = false; // set true if Netlify env var is configured
 
-  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch(_) {} _memKey = v; }
-  function lsGet(k) { try { return localStorage.getItem(k) || _memKey; } catch(_) { return _memKey; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch(_) {} try { sessionStorage.setItem(k, v); } catch(_) {} }
+  function lsGet(k) { try { return localStorage.getItem(k) || sessionStorage.getItem(k) || ''; } catch(_) { return ''; } }
 
-  function loadSavedApiKey() {
-    const saved = lsGet(LS_KEY) || '';
-    if (saved) {
-      const inp = document.getElementById('anthropicApiKey');
-      if (inp) inp.value = saved;
-      _memKey = saved;
-    }
-    return saved;
+  function getApiKey() {
+    if (window._serverHasKey) return ''; // server uses its own env var
+    const fromInput = document.getElementById('anthropicApiKey')?.value?.trim() || '';
+    return fromInput || lsGet(LS_KEY) || '';
+  }
+
+  function hasValidKey() {
+    return window._serverHasKey || !!getApiKey();
   }
 
   function saveApiKeyFromModal() {
     const val = document.getElementById('apiKeyModalInput')?.value?.trim() || '';
     if (!val) { alert('Please enter your API key.'); return; }
-    _memKey = val;
     lsSet(LS_KEY, val);
     const inp = document.getElementById('anthropicApiKey');
     if (inp) inp.value = val;
@@ -5098,48 +5093,49 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
     if (window._pendingPopulate) { window._pendingPopulate = false; populateHotWatchlist(); }
   }
 
-  function getApiKey() {
-    const fromInput = document.getElementById('anthropicApiKey')?.value?.trim() || '';
-    const stored = fromInput || _memKey || lsGet(LS_KEY) || '';
-    // '__server__' means env var is set — send empty string so function uses its own key
-    return stored === '__server__' ? '' : stored;
+  function markServerKeyActive() {
+    window._serverHasKey = true;
+    const inp = document.getElementById('anthropicApiKey');
+    if (inp) {
+      inp.value = '';
+      inp.placeholder = '✅ Key configured in Netlify — no entry needed';
+      inp.disabled = true;
+      inp.style.opacity = '0.6';
+    }
+    // Hide the API key modal if it was showing
+    const modal = document.getElementById('apiKeyModal');
+    if (modal) modal.style.display = 'none';
   }
 
-  // On load: check if server has key configured, then load any saved local key
   async function initApiKey() {
-    // First load any locally saved key
-    loadSavedApiKey();
+    // 1. Load any locally saved key first
+    const saved = lsGet(LS_KEY);
+    if (saved) {
+      const inp = document.getElementById('anthropicApiKey');
+      if (inp) inp.value = saved;
+    }
 
-    // Then check if Netlify env var is set — if so, mark as "server key available"
+    // 2. Check if Netlify has the key server-side
     try {
       const r = await Promise.race([
         fetch('/.netlify/functions/status'),
-        new Promise((_, rej) => setTimeout(() => rej(), 5000))
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
       ]);
-      const d = await r.json();
-      if (d.hasServerKey) {
-        // Server has the key — no need for user to enter one
-        _memKey = '__server__';
-        lsSet(LS_KEY, '__server__');
-        // Update UI to show key is configured
-        const inp = document.getElementById('anthropicApiKey');
-        if (inp) {
-          inp.value = '';
-          inp.placeholder = '✅ API key configured in Netlify — no entry needed';
-          inp.disabled = true;
+      if (r.ok) {
+        const d = await r.json();
+        if (d.hasServerKey) {
+          markServerKeyActive();
+          return; // done — server handles everything
         }
-        const label = document.querySelector('label[for="anthropicApiKey"], label:has(+ #anthropicApiKey)');
-        if (label) label.style.color = '#22c55e';
       }
-    } catch (_) {
-      // Status check failed — fall through, user can still paste key manually
-    }
+    } catch (_) {}
 
+    // 3. Wire up input → save on change
     const inp = document.getElementById('anthropicApiKey');
-    if (inp && !inp.disabled) {
+    if (inp) {
       inp.addEventListener('input', () => {
         const v = inp.value.trim();
-        if (v) { _memKey = v; lsSet(LS_KEY, v); }
+        if (v) lsSet(LS_KEY, v);
       });
     }
   }
@@ -5147,7 +5143,7 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initApiKey);
   } else {
-    initApiKey();
+    setTimeout(initApiKey, 0); // next tick after DOM settles
   }
 
 
@@ -5166,12 +5162,11 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
 
     area.innerHTML = '<div style="font-size:13px;color:var(--muted)">🔍 Running diagnostics…</div>';
 
-    // Test 1: API key — check both local and server
-    const key = getApiKey();
-    const isServer = (_memKey === '__server__' || lsGet(LS_KEY) === '__server__');
-    if (isServer) {
-      check('Anthropic API key', true, 'Configured in Netlify env vars ✅ (no manual entry needed)');
+    // Test 1: API key
+    if (window._serverHasKey) {
+      check('Anthropic API key', true, 'Configured in Netlify env vars ✅ — no manual entry needed');
     } else {
+      const key = getApiKey();
       check('Anthropic API key', !!key, key ? 'Found (' + key.slice(0,12) + '…)' : 'MISSING — open ⚙ Settings and paste your key');
     }
 

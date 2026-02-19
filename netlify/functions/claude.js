@@ -7,42 +7,36 @@ const CORS = {
 };
 
 exports.handler = async function (event, context) {
+  // Give ourselves max time — Netlify kills at 26s, we stop at 24s
+  context.callbackWaitsForEmptyEventLoop = false;
+
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: CORS, body: "" };
   }
-
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: { ...CORS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Method not allowed" }),
-    };
+    return { statusCode: 405, headers: { ...CORS, "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Method not allowed" }) };
   }
 
   const apiKey =
     process.env.ANTHROPIC_API_KEY ||
     event.headers["x-anthropic-key"] ||
-    event.headers["X-Anthropic-Key"] ||
-    "";
+    event.headers["X-Anthropic-Key"] || "";
 
   if (!apiKey) {
-    return {
-      statusCode: 401,
-      headers: { ...CORS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "No API key. Set ANTHROPIC_API_KEY in Netlify env vars or paste in app Settings." }),
-    };
+    return { statusCode: 401, headers: { ...CORS, "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "No API key. Set ANTHROPIC_API_KEY in Netlify env vars." }) };
   }
 
   let payload;
-  try {
-    payload = JSON.parse(event.body || "{}");
-  } catch (e) {
-    return {
-      statusCode: 400,
-      headers: { ...CORS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Invalid JSON: " + e.message }),
-    };
+  try { payload = JSON.parse(event.body || "{}"); }
+  catch (e) {
+    return { statusCode: 400, headers: { ...CORS, "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Invalid JSON: " + e.message }) };
   }
+
+  // Cap max_tokens to keep responses within timeout window
+  if (payload.max_tokens > 2000) payload.max_tokens = 2000;
 
   try {
     const result = await callAnthropic(payload, apiKey);
@@ -52,11 +46,8 @@ exports.handler = async function (event, context) {
       body: result.body,
     };
   } catch (e) {
-    return {
-      statusCode: 500,
-      headers: { ...CORS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Proxy error: " + e.message }),
-    };
+    return { statusCode: 500, headers: { ...CORS, "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Proxy error: " + e.message }) };
   }
 };
 
@@ -80,7 +71,8 @@ function callAnthropic(payload, apiKey) {
       res.on("end", () => resolve({ status: res.statusCode, body: data }));
     });
     req.on("error", reject);
-    req.setTimeout(60000, () => { req.destroy(); reject(new Error("Anthropic timed out")); });
+    // 23s hard timeout — leaves buffer before Netlify kills us
+    req.setTimeout(23000, () => { req.destroy(); reject(new Error("Anthropic timed out — try fewer plays or a smaller universe")); });
     req.write(bodyStr);
     req.end();
   });

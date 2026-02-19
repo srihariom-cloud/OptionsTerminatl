@@ -1,6 +1,18 @@
 [build]
   functions = "netlify/functions"
 
+[functions]
+  node_bundler = "esbuild"
+
+[functions."claude"]
+  timeout = 26
+
+[functions."prices"]
+  timeout = 26
+
+[functions."status"]
+  timeout = 10
+
 [[headers]]
   for = "/*"
   [headers.values]
