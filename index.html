@@ -4457,11 +4457,46 @@ function toggleHotSettings(){
 
 // Universe definitions: curated pools per scan mode
 const SCAN_UNIVERSES = {
-  sp500:     ['AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','BRK-B','JPM','V','UNH','XOM','LLY','JNJ','PG','MA','HD','MRK','ABBV','CVX','PEP','AVGO','KO','WMT','MCD','COST','ACN','CRM','BAC','NKE','ADBE','TMO','ORCL','AMD','NFLX','INTC','QCOM','IBM','GS','CAT'],
-  nasdaq100: ['NVDA','AAPL','MSFT','AMZN','GOOGL','META','TSLA','AVGO','COST','NFLX','AMD','QCOM','ADBE','INTC','PYPL','CSCO','HON','AMAT','LRCX','MU','PANW','SNPS','CDNS','KLAC','MRVL','ABNB','DDOG','CRWD','SNOW','ZS','MELI','PCAR','ASML','AZN','TTD','VRSK','IDXX'],
-  momentum:  ['NVDA','SMCI','PLTR','ARM','MSTR','COIN','RXRX','ACHR','IONQ','LUNR','SOFI','RIVN','LCID','NIO','SPCE','RKLB','CLSK','MARA','RIOT','HUT','BITF','TSLA','NET','DDOG','CRWD','SNOW','OKTA','ZS','LYFT','UBER','HOOD'],
-  earnings:  ['NVDA','AAPL','MSFT','AMZN','GOOGL','META','AMD','INTC','QCOM','IBM','PANW','SNOW','CRM','ADBE','NFLX','TSLA','COST','WMT','HD','TGT','SBUX','DIS','BA','GE','F','GM','JPM','GS','MS','BAC'],
-  allcaps:   ['SPY','QQQ','NVDA','TSLA','AAPL','META','AMZN','PLTR','AMD','SOFI','MSTR','COIN','RKLB','SMCI','ARM','NET','DDOG','CRWD','UBER','LYFT','NIO','RIVN','SNOW','ZS','PANW','MU','INTC','QCOM','AVGO','NFLX','MSFT']
+  // Keys match dropdown option values exactly
+  liquid_leaders: [
+    'SPY','QQQ','IWM',
+    'NVDA','AAPL','MSFT','AMZN','META','GOOGL','TSLA','AMD','AVGO',
+    'JPM','GS','MS','BAC','C','WFC','BRK-B',
+    'XOM','CVX','OXY',
+    'LLY','UNH','ABBV','PFE','MRK','JNJ',
+    'CAT','BA','GE','RTX','LMT',
+    'WMT','COST','HD','TGT','NKE','MCD','AMZN',
+    'NFLX','DIS',
+    'GLD','TLT'
+  ],
+  tech_megacap: [
+    'NVDA','AAPL','MSFT','META','GOOGL','AMZN','TSLA','AMD','AVGO','QCOM',
+    'INTC','MU','AMAT','LRCX','KLAC','ARM','SMCI','PLTR','ORCL','CRM',
+    'ADBE','NOW','PANW','CRWD','DDOG','NET','ZS','SNOW','COIN','MSTR',
+    'UBER','LYFT','ABNB','PYPL','SQ','HOOD','TTD','RBLX','SNAP','PINS'
+  ],
+  high_beta_momentum: [
+    'NVDA','TSLA','PLTR','ARM','SMCI','MSTR','COIN','SOFI','HOOD','RIVN',
+    'NIO','LCID','ACHR','IONQ','RKLB','LUNR','RXRX','CLSK','MARA','RIOT',
+    'DKNG','PENN','HIMS','JOBY','OPEN','UPST','AFRM','BILL','PATH','AI'
+  ],
+  sector_rotation: [
+    'NVDA','AAPL','MSFT','AMD',
+    'JPM','GS','BAC','MS','C','BRK-B',
+    'LLY','UNH','ABBV','PFE','MRK',
+    'XOM','CVX','OXY','DVN',
+    'AMZN','TSLA','HD','NKE','MCD',
+    'WMT','COST','PG','KO','PEP',
+    'CAT','BA','GE','RTX','UPS',
+    'FCX','NEM','AA',
+    'TLT','GLD','USO','IWM'
+  ],
+  earnings_iv: [
+    'NVDA','AAPL','MSFT','AMZN','META','GOOGL','TSLA','AMD','NFLX','COST',
+    'WMT','TGT','HD','SBUX','DIS','BA','GE','F','GM','JPM',
+    'GS','MS','BAC','C','WFC','PFE','LLY','ABBV','MRK','UNH',
+    'XOM','CVX','OXY','CAT','RTX','PANW','CRM','ORCL','ADBE','IBM'
+  ]
 };
 
 async function populateHotWatchlist() {
@@ -4470,9 +4505,10 @@ async function populateHotWatchlist() {
   const addAllRow = document.getElementById('hotAddAllRow');
   const addedMsg = document.getElementById('hotAddedMsg');
 
-  // Check for API key first — show modal if missing
+  // Check for API key — either user-provided or server env var
   const existingKey = getApiKey();
-  if (!existingKey) {
+  const serverKey = (_memKey === '__server__' || lsGet(LS_KEY) === '__server__');
+  if (!existingKey && !serverKey) {
     document.getElementById('apiKeyModalInput').value = '';
     document.getElementById('apiKeyModal').style.display = 'flex';
     window._pendingPopulate = true;
@@ -4491,7 +4527,7 @@ async function populateHotWatchlist() {
     const universe = document.getElementById('hotScanUniverse')?.value || 'liquid_leaders';
     const maxPlays = parseInt(document.getElementById('hotMaxPlays')?.value || '10');
     const uwKey = document.getElementById('uwApiKey')?.value?.trim() || '';
-    const tickers = SCAN_UNIVERSES[universe] || SCAN_UNIVERSES.liquid_leaders;
+    const tickers = SCAN_UNIVERSES[universe] || SCAN_UNIVERSES['liquid_leaders'];
     const sample = tickers.slice(0, 40);
 
     // ── Step 1: Price data ────────────────────────────────────────────────
@@ -4576,39 +4612,80 @@ async function generatePlaysWithClaude(priceData, universe, maxPlays, uwFlow) {
   const today = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
   const weekStr = dateToLocalISODate(new Date());
 
-  // Sort by highest volume ratio (most conviction) then filter to liquid names
+  // Sort: highest volume ratio first (strongest conviction signal)
   const sortedData = Object.values(priceData)
-    .filter(d => d.last && d.volRatio)
+    .filter(d => d.last)
     .sort((a, b) => (b.volRatio || 0) - (a.volRatio || 0));
 
-  const dataLines = sortedData
-    .map(d => {
-      const avgVolM = d.avgVol ? (d.avgVol / 1e6).toFixed(1) + 'M' : '?';
-      return `${d.sym}: $${d.last} | 5d chg: ${d.chg5d != null ? d.chg5d + '%' : '?'} | vol ratio: ${d.volRatio ?? '?'}x (avg ${avgVolM}/day) | ATR%: ${d.atrPct ?? '?'}% | 52wH: $${d.high52 ?? '?'} (${d.distFrom52h ?? '?'}% below) | 52wL: $${d.low52 ?? '?'} (${d.distFrom52l ?? '?'}% above)`;
-    })
-    .join('\n');
+  const dataLines = sortedData.map(d => {
+    const avgVolM = d.avgVol ? (d.avgVol / 1e6).toFixed(1) + 'M' : '?';
+    const distH = d.distFrom52h != null ? d.distFrom52h + '% below 52wH' : '?';
+    const distL = d.distFrom52l != null ? d.distFrom52l + '% above 52wL' : '?';
+    return [
+      `${d.sym}: $${d.last}`,
+      `5d chg: ${d.chg5d != null ? d.chg5d + '%' : '?'}`,
+      `vol ratio: ${d.volRatio ?? '?'}x (avg ${avgVolM}/day)`,
+      `ATR: ${d.atrPct ?? '?'}%`,
+      `52wH: $${d.high52 ?? '?'} (${distH})`,
+      `52wL: $${d.low52 ?? '?'} (${distL})`,
+    ].join(' | ');
+  }).join('\n');
 
-  const uwSection = uwFlow ? `\n\nUNUSUAL OPTIONS FLOW DATA (primary signal — weight heavily):\n${uwFlow}` : '';
+  const uwSection = uwFlow
+    ? `\n\nUNUSUAL OPTIONS FLOW (treat as highest-conviction signal):\n${uwFlow}`
+    : '';
 
-  const prompt = `You are a professional options trader and quantitative analyst. Today is ${today}.
+  const prompt = `You are a professional options trader with 20+ years of experience trading equities and derivatives. Today is ${today}.
 
-LIVE MARKET DATA — "${universe}" scan (sorted by volume conviction, highest first):
+LIVE PRICE & VOLUME DATA (sorted by volume conviction — highest first):
 ${dataLines}
 ${uwSection}
 
-Your task: Identify the ${maxPlays} HIGHEST-PROBABILITY options plays for the week of ${weekStr}.
+YOUR TASK: Identify the ${maxPlays} highest-probability options plays for the week of ${weekStr}.
 
-SELECTION CRITERIA (rank by these in order):
-1. VOLUME CONVICTION: vol ratio > 1.5x = smart money accumulation/distribution. > 2x = very high conviction.
-2. VOLATILITY / OPTIONS PREMIUM: ATR% > 2% = fat premium, good for both buyers and sellers
-3. TECHNICAL STRUCTURE: Near 52wk high (<5% away) = breakout or rejection setup. Near 52wk low (<10% away) = bounce or breakdown.
-4. MOMENTUM: Strong 5d momentum (>+3% or <-3%) with volume confirmation = trend continuation candidate
-5. LIQUIDITY: Prefer names with avg volume >5M/day for tight bid/ask spreads in options
-${uwFlow ? '6. OPTIONS FLOW: Unusual Whales data is your highest-signal input — flow direction = smart money bet' : ''}
+ANALYSIS FRAMEWORK — evaluate each name across ALL of these dimensions:
 
-For EACH play, provide BOTH a bull AND bear case with win probabilities:
+1. MARKET SENTIMENT & MACRO CONTEXT
+   - Is the current market environment risk-on or risk-off?
+   - How does sector rotation affect this name this week?
+   - What macro events (Fed, CPI, earnings season) create tailwinds or headwinds?
 
-Return ONLY a valid JSON array (no markdown, no code fences) with exactly ${maxPlays} objects:
+2. VOLUME & OPTIONS FLOW SIGNALS
+   - Vol ratio > 1.5x = unusual accumulation or distribution (smart money signal)
+   - Vol ratio > 2.5x = very high conviction — strong directional bet
+   - If UW flow data available, flow direction is your PRIMARY signal
+   - Consider open interest buildup at key strikes (infer from price + vol ratio patterns)
+
+3. KEY TECHNICAL LEVELS
+   - Within 3% of 52wk HIGH: breakout candidate (calls) OR exhaustion/fade (puts)
+   - Within 8% of 52wk LOW: bounce candidate (calls) OR breakdown continuation (puts)
+   - Mid-range (between 52wk levels): look for momentum continuation
+   - ATR% > 2.5% = high implied volatility environment — wider spreads make sense
+
+4. CURRENT PRICE ACTION & MOMENTUM
+   - 5d change > +4%: strong bullish momentum — continuation or mean-reversion?
+   - 5d change < -4%: strong bearish momentum — continuation or bounce?
+   - Flat 5d change with high vol ratio: accumulation/distribution before a move
+
+5. EXTERNAL CATALYSTS (use your training knowledge)
+   - Upcoming earnings dates for these specific tickers
+   - Recent sector news, product launches, regulatory events
+   - CEO changes, analyst upgrades/downgrades, geopolitical exposure
+   - Index rebalancing, options expiration dynamics (weekly vs monthly)
+
+6. OPTIONS STRUCTURE RECOMMENDATION
+   - Specify exact strategy: long call, long put, bull call spread, bear put spread, straddle, strangle, cash-secured put, covered call
+   - Recommend strike (ATM, slight OTM, deep OTM) and expiration (weekly, 2-week, monthly)
+   - Note IV environment: high IV → favor spreads/selling; low IV → favor outright buys
+
+SELECTION RULES:
+- Prefer names with avg daily volume > 3M (tight options bid/ask spreads)
+- Include a MIX of bias types: aim for ~40% bull, ~30% bear, ~30% both-sides/neutral
+- Do NOT pick more than 3 names from the same sector
+- At least 2 plays must be "high" confidence
+
+Return ONLY a valid JSON array — no markdown, no explanation, no code fences.
+Exactly ${maxPlays} objects with this structure:
 [
   {
     "ticker": "NVDA",
@@ -4616,7 +4693,7 @@ Return ONLY a valid JSON array (no markdown, no code fences) with exactly ${maxP
     "confidence": "high",
     "bull_prob": 65,
     "bear_prob": 35,
-    "thesis": "2-3 sentence explanation referencing the specific data (vol ratio, ATR, 52wk level)",
+    "thesis": "2-3 sentences citing specific data points: vol ratio, ATR, 52wk position, and why this is a play THIS week",
     "bull_case": "What happens if bulls are right — price target and why",
     "bear_case": "What happens if bears are right — downside and why",
     "key_level": "$XXX — what this level means (support/resistance/breakout trigger)",
@@ -4630,15 +4707,16 @@ Return ONLY a valid JSON array (no markdown, no code fences) with exactly ${maxP
 Only include the JSON array. No other text.`;
 
   const userKey = getApiKey();
-  if (!userKey) throw new Error('No Anthropic API key set. Click ⚙ Settings and paste your key.');
+  const isServerKey = (_memKey === '__server__' || lsGet(LS_KEY) === '__server__');
+  if (!userKey && !isServerKey) throw new Error('No Anthropic API key set. Click ⚙ Settings and paste your key.');
 
-  // Call via Netlify serverless function (avoids CORS — works from any browser)
+  // Call via Netlify serverless function — server uses env var key if no userKey sent
+  const claudeHeaders = { 'Content-Type': 'application/json' };
+  if (userKey) claudeHeaders['x-anthropic-key'] = userKey;
+
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-anthropic-key': userKey,   // forwarded server-side; never hits browser CORS
-    },
+    headers: claudeHeaders,
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4000,
@@ -5022,20 +5100,50 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
 
   function getApiKey() {
     const fromInput = document.getElementById('anthropicApiKey')?.value?.trim() || '';
-    return fromInput || _memKey || lsGet(LS_KEY) || '';
+    const stored = fromInput || _memKey || lsGet(LS_KEY) || '';
+    // '__server__' means env var is set — send empty string so function uses its own key
+    return stored === '__server__' ? '' : stored;
   }
 
-  // Load on DOM ready — try multiple timings to handle Safari delays
-  function initApiKey() {
+  // On load: check if server has key configured, then load any saved local key
+  async function initApiKey() {
+    // First load any locally saved key
     loadSavedApiKey();
+
+    // Then check if Netlify env var is set — if so, mark as "server key available"
+    try {
+      const r = await Promise.race([
+        fetch('/.netlify/functions/status'),
+        new Promise((_, rej) => setTimeout(() => rej(), 5000))
+      ]);
+      const d = await r.json();
+      if (d.hasServerKey) {
+        // Server has the key — no need for user to enter one
+        _memKey = '__server__';
+        lsSet(LS_KEY, '__server__');
+        // Update UI to show key is configured
+        const inp = document.getElementById('anthropicApiKey');
+        if (inp) {
+          inp.value = '';
+          inp.placeholder = '✅ API key configured in Netlify — no entry needed';
+          inp.disabled = true;
+        }
+        const label = document.querySelector('label[for="anthropicApiKey"], label:has(+ #anthropicApiKey)');
+        if (label) label.style.color = '#22c55e';
+      }
+    } catch (_) {
+      // Status check failed — fall through, user can still paste key manually
+    }
+
     const inp = document.getElementById('anthropicApiKey');
-    if (inp) {
+    if (inp && !inp.disabled) {
       inp.addEventListener('input', () => {
         const v = inp.value.trim();
         if (v) { _memKey = v; lsSet(LS_KEY, v); }
       });
     }
   }
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initApiKey);
   } else {
@@ -5058,9 +5166,14 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
 
     area.innerHTML = '<div style="font-size:13px;color:var(--muted)">🔍 Running diagnostics…</div>';
 
-    // Test 1: API key present
+    // Test 1: API key — check both local and server
     const key = getApiKey();
-    check('Anthropic API key', !!key, key ? 'Found (' + key.slice(0,12) + '…)' : 'MISSING — open ⚙ Settings and paste your key');
+    const isServer = (_memKey === '__server__' || lsGet(LS_KEY) === '__server__');
+    if (isServer) {
+      check('Anthropic API key', true, 'Configured in Netlify env vars ✅ (no manual entry needed)');
+    } else {
+      check('Anthropic API key', !!key, key ? 'Found (' + key.slice(0,12) + '…)' : 'MISSING — open ⚙ Settings and paste your key');
+    }
 
     // Test 2: Netlify prices function
     try {
