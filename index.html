@@ -4633,57 +4633,23 @@ async function generatePlaysWithClaude(priceData, universe, maxPlays, uwFlow) {
     ? `\n\nUNUSUAL OPTIONS FLOW (treat as highest-conviction signal):\n${uwFlow}`
     : '';
 
-  const prompt = `You are a professional options trader with 20+ years of experience trading equities and derivatives. Today is ${today}.
+  const prompt = `You are a professional options trader. Today is ${today}. Week of ${weekStr}.
 
-LIVE PRICE & VOLUME DATA (sorted by volume conviction — highest first):
+LIVE DATA (sorted by volume conviction):
 ${dataLines}
 ${uwSection}
 
-YOUR TASK: Identify the ${maxPlays} highest-probability options plays for the week of ${weekStr}.
+Pick the ${maxPlays} best options plays. For each evaluate:
+- Market sentiment & macro (risk-on/off, Fed, CPI, sector rotation)
+- Volume conviction (>1.5x = smart money signal, >2.5x = high conviction)
+- Key levels (within 3% of 52wH = breakout/fade; within 8% of 52wL = bounce/breakdown)
+- Price momentum (5d chg >4% or <-4% with vol = trend continuation)
+- Known catalysts from your training (earnings dates, news, product launches)
+- Options structure (strategy, strike, expiry, IV context)
 
-ANALYSIS FRAMEWORK — evaluate each name across ALL of these dimensions:
+Rules: prefer avg vol >3M/day; mix ~40% bull / 30% bear / 30% both; max 3 from same sector.
 
-1. MARKET SENTIMENT & MACRO CONTEXT
-   - Is the current market environment risk-on or risk-off?
-   - How does sector rotation affect this name this week?
-   - What macro events (Fed, CPI, earnings season) create tailwinds or headwinds?
-
-2. VOLUME & OPTIONS FLOW SIGNALS
-   - Vol ratio > 1.5x = unusual accumulation or distribution (smart money signal)
-   - Vol ratio > 2.5x = very high conviction — strong directional bet
-   - If UW flow data available, flow direction is your PRIMARY signal
-   - Consider open interest buildup at key strikes (infer from price + vol ratio patterns)
-
-3. KEY TECHNICAL LEVELS
-   - Within 3% of 52wk HIGH: breakout candidate (calls) OR exhaustion/fade (puts)
-   - Within 8% of 52wk LOW: bounce candidate (calls) OR breakdown continuation (puts)
-   - Mid-range (between 52wk levels): look for momentum continuation
-   - ATR% > 2.5% = high implied volatility environment — wider spreads make sense
-
-4. CURRENT PRICE ACTION & MOMENTUM
-   - 5d change > +4%: strong bullish momentum — continuation or mean-reversion?
-   - 5d change < -4%: strong bearish momentum — continuation or bounce?
-   - Flat 5d change with high vol ratio: accumulation/distribution before a move
-
-5. EXTERNAL CATALYSTS (use your training knowledge)
-   - Upcoming earnings dates for these specific tickers
-   - Recent sector news, product launches, regulatory events
-   - CEO changes, analyst upgrades/downgrades, geopolitical exposure
-   - Index rebalancing, options expiration dynamics (weekly vs monthly)
-
-6. OPTIONS STRUCTURE RECOMMENDATION
-   - Specify exact strategy: long call, long put, bull call spread, bear put spread, straddle, strangle, cash-secured put, covered call
-   - Recommend strike (ATM, slight OTM, deep OTM) and expiration (weekly, 2-week, monthly)
-   - Note IV environment: high IV → favor spreads/selling; low IV → favor outright buys
-
-SELECTION RULES:
-- Prefer names with avg daily volume > 3M (tight options bid/ask spreads)
-- Include a MIX of bias types: aim for ~40% bull, ~30% bear, ~30% both-sides/neutral
-- Do NOT pick more than 3 names from the same sector
-- At least 2 plays must be "high" confidence
-
-Return ONLY a valid JSON array — no markdown, no explanation, no code fences.
-Exactly ${maxPlays} objects with this structure:
+Return ONLY a JSON array, no markdown, no explanation. Exactly ${maxPlays} objects:
 [
   {
     "ticker": "NVDA",
@@ -4691,7 +4657,7 @@ Exactly ${maxPlays} objects with this structure:
     "confidence": "high",
     "bull_prob": 65,
     "bear_prob": 35,
-    "thesis": "2-3 sentences citing specific data points: vol ratio, ATR, 52wk position, and why this is a play THIS week",
+    "thesis": "2-3 sentences: cite vol ratio, ATR, 52wk position, why this week",
     "bull_case": "What happens if bulls are right — price target and why",
     "bear_case": "What happens if bears are right — downside and why",
     "key_level": "$XXX — what this level means (support/resistance/breakout trigger)",
@@ -5181,19 +5147,22 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
       check('Market data (Netlify /prices)', ok, ok ? `SPY $${d.results.SPY.last}` : (r.status === 404 ? 'Function not found — prices.js not deployed' : 'HTTP ' + r.status));
     } catch(e) { check('Market data (Netlify /prices)', false, e?.message || 'Failed'); }
 
-    // Test 4: Netlify function reachable
+    // Test 4: Netlify Claude proxy
     try {
+      const diagKey = getApiKey(); // scoped here — avoids reference error
+      const diagHeaders = { 'Content-Type': 'application/json' };
+      if (diagKey) diagHeaders['x-anthropic-key'] = diagKey;
       const r = await Promise.race([
         fetch('/.netlify/functions/claude', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-anthropic-key': key || 'test' },
+          headers: diagHeaders,
           body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] }),
         }),
         new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after 15s — function may not exist (local file?)')),15000))
       ]);
       const txt = await r.text();
-      if (r.status === 401) check('Netlify Claude proxy', false, 'Reachable but no API key set in Netlify env vars — paste key in ⚙ Settings instead');
-      else if (r.status === 404) check('Netlify Claude proxy', false, 'Function not found — app may not be deployed on Netlify (running locally?)');
+      if (r.status === 401) check('Netlify Claude proxy', false, 'No API key in Netlify env vars — add ANTHROPIC_API_KEY in Site config');
+      else if (r.status === 404) check('Netlify Claude proxy', false, 'Function not found — claude.js not deployed correctly');
       else if (r.ok) check('Netlify Claude proxy', true, 'Working — Claude API reachable');
       else check('Netlify Claude proxy', false, 'HTTP ' + r.status + ': ' + txt.slice(0,120));
     } catch(e) { check('Netlify Claude proxy', false, e?.message || 'Failed'); }
