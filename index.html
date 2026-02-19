@@ -4114,14 +4114,22 @@ async function fetchMarketData(){
       const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=2d`;
       const proxies = [
         `https://api.allorigins.win/raw?url=${encodeURIComponent(yfUrl)}`,
-        `https://thingproxy.freeboard.io/fetch/${yfUrl}`,
-        yfUrl
+        `https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`,
+        `https://corsproxy.io/?${encodeURIComponent(yfUrl)}`,
+        `https://proxy.cors.sh/${yfUrl}`,
       ];
       let d = null;
       for (const url of proxies) {
         try {
-          const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-          if (r.ok) { d = await r.json(); break; }
+          const r = await Promise.race([
+            fetch(url, { mode: 'cors', cache: 'no-cache' }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
+          ]);
+          if (!r.ok) continue;
+          const text = await r.text();
+          let parsed; try { parsed = JSON.parse(text); } catch { continue; }
+          if (parsed?.contents) { try { parsed = JSON.parse(parsed.contents); } catch { continue; } }
+          if (parsed?.chart?.result?.[0]) { d = parsed; break; }
         } catch (_) {}
       }
       const q = d?.chart?.result?.[0];
@@ -4554,22 +4562,28 @@ async function populateHotWatchlist() {
   btn.disabled = false;
 }
 
-// ── Yahoo Finance fetcher — allorigins.win as primary (corsproxy gives 403) ──
+// ── Yahoo Finance fetcher with multiple proxies ──
 async function yfFetch(sym) {
   const base = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=10d`;
   const proxies = [
     `https://api.allorigins.win/raw?url=${encodeURIComponent(base)}`,
-    `https://thingproxy.freeboard.io/fetch/${base}`,
+    `https://api.allorigins.win/get?url=${encodeURIComponent(base)}`,
+    `https://corsproxy.io/?${encodeURIComponent(base)}`,
+    `https://proxy.cors.sh/${base}`,
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(base)}`,
   ];
   for (const url of proxies) {
     try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 9000);
-      const r = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(t);
+      const r = await Promise.race([
+        fetch(url, { mode: 'cors', cache: 'no-cache' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
+      ]);
       if (!r.ok) continue;
-      const d = await r.json();
+      const text = await r.text();
+      // allorigins /get wraps in {contents: "..."}
+      let d;
+      try { d = JSON.parse(text); } catch { continue; }
+      if (d?.contents) { try { d = JSON.parse(d.contents); } catch { continue; } }
       if (d?.chart?.result?.[0]) return d;
     } catch (_) {}
   }
@@ -5051,14 +5065,19 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
 });
 
 
-  // ── API KEY PERSISTENCE (localStorage) ────────────────────────────────────
+  // ── API KEY PERSISTENCE (localStorage with memory fallback) ──────────────
   const LS_KEY = 'twu_anthropic_key';
+  let _memKey = ''; // in-memory fallback if localStorage blocked (Safari private mode)
+
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch(_) {} _memKey = v; }
+  function lsGet(k) { try { return localStorage.getItem(k) || _memKey; } catch(_) { return _memKey; } }
 
   function loadSavedApiKey() {
-    const saved = localStorage.getItem(LS_KEY) || '';
+    const saved = lsGet(LS_KEY) || '';
     if (saved) {
       const inp = document.getElementById('anthropicApiKey');
       if (inp) inp.value = saved;
+      _memKey = saved;
     }
     return saved;
   }
@@ -5066,31 +5085,35 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
   function saveApiKeyFromModal() {
     const val = document.getElementById('apiKeyModalInput')?.value?.trim() || '';
     if (!val) { alert('Please enter your API key.'); return; }
-    localStorage.setItem(LS_KEY, val);
+    _memKey = val;
+    lsSet(LS_KEY, val);
     const inp = document.getElementById('anthropicApiKey');
     if (inp) inp.value = val;
     document.getElementById('apiKeyModal').style.display = 'none';
-    // Resume the populate if it was triggered
     if (window._pendingPopulate) { window._pendingPopulate = false; populateHotWatchlist(); }
   }
 
   function getApiKey() {
     const fromInput = document.getElementById('anthropicApiKey')?.value?.trim() || '';
-    const fromStorage = localStorage.getItem(LS_KEY) || '';
-    return fromInput || fromStorage;
+    return fromInput || _memKey || lsGet(LS_KEY) || '';
   }
 
-  // Sync settings input → localStorage on change
-  document.addEventListener('DOMContentLoaded', () => {
+  // Load on DOM ready — try multiple timings to handle Safari delays
+  function initApiKey() {
     loadSavedApiKey();
     const inp = document.getElementById('anthropicApiKey');
     if (inp) {
-      inp.addEventListener('change', () => {
+      inp.addEventListener('input', () => {
         const v = inp.value.trim();
-        if (v) localStorage.setItem(LS_KEY, v);
+        if (v) { _memKey = v; lsSet(LS_KEY, v); }
       });
     }
-  });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApiKey);
+  } else {
+    initApiKey();
+  }
 
 
   // ── DIAGNOSTICS ────────────────────────────────────────────────────────────
@@ -5114,26 +5137,36 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
 
     // Test 2: allorigins.win (primary proxy)
     try {
-      const r = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { signal: AbortSignal.timeout(8000) });
-      const d = await r.json();
+      const r = await Promise.race([
+        fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { mode:'cors' }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after 12s')),12000))
+      ]);
+      const text = await r.text();
+      let d; try { d = JSON.parse(text); } catch { d = null; }
+      if (d?.contents) { try { d = JSON.parse(d.contents); } catch { d = null; } }
       check('Market data (allorigins.win)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
     } catch(e) { check('Market data (allorigins.win)', false, e?.message || 'Failed'); }
 
-    // Test 3: thingproxy fallback
+    // Test 3: cors.sh fallback
     try {
-      const r = await fetch('https://thingproxy.freeboard.io/fetch/https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d', { signal: AbortSignal.timeout(8000) });
+      const r = await Promise.race([
+        fetch('https://proxy.cors.sh/https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d', { mode:'cors' }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after 12s')),12000))
+      ]);
       const d = await r.json();
-      check('Market data (thingproxy fallback)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
-    } catch(e) { check('Market data (thingproxy fallback)', false, e?.message || 'Failed'); }
+      check('Market data (proxy.cors.sh)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
+    } catch(e) { check('Market data (proxy.cors.sh)', false, e?.message || 'Failed'); }
 
     // Test 4: Netlify function reachable
     try {
-      const r = await fetch('/.netlify/functions/claude', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-anthropic-key': key || 'test' },
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] }),
-        signal: AbortSignal.timeout(15000)
-      });
+      const r = await Promise.race([
+        fetch('/.netlify/functions/claude', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-anthropic-key': key || 'test' },
+          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] }),
+        }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after 15s — function may not exist (local file?)')),15000))
+      ]);
       const txt = await r.text();
       if (r.status === 401) check('Netlify Claude proxy', false, 'Reachable but no API key set in Netlify env vars — paste key in ⚙ Settings instead');
       else if (r.status === 404) check('Netlify Claude proxy', false, 'Function not found — app may not be deployed on Netlify (running locally?)');
