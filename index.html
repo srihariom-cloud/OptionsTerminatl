@@ -4113,8 +4113,8 @@ async function fetchMarketData(){
     const mktResults = await Promise.allSettled(mktSyms.map(async ([sym, label]) => {
       const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=2d`;
       const proxies = [
-        `https://corsproxy.io/?url=${encodeURIComponent(yfUrl)}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(yfUrl)}`,
+        `https://thingproxy.freeboard.io/fetch/${yfUrl}`,
         yfUrl
       ];
       let d = null;
@@ -4554,13 +4554,13 @@ async function populateHotWatchlist() {
   btn.disabled = false;
 }
 
-// ── Multi-proxy Yahoo Finance fetcher (works on GitHub Pages / any HTTPS host) ──
+// ── Yahoo Finance fetcher — allorigins.win as primary (corsproxy gives 403) ──
 async function yfFetch(sym) {
   const base = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=10d`;
   const proxies = [
-    `https://corsproxy.io/?url=${encodeURIComponent(base)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(base)}`,
     `https://thingproxy.freeboard.io/fetch/${base}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(base)}`,
   ];
   for (const url of proxies) {
     try {
@@ -4573,7 +4573,7 @@ async function yfFetch(sym) {
       if (d?.chart?.result?.[0]) return d;
     } catch (_) {}
   }
-  return null; // all proxies failed — symbol skipped silently
+  return null;
 }
 
 async function fetchBatchPrices(tickers) {
@@ -5112,19 +5112,19 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
     const key = getApiKey();
     check('Anthropic API key', !!key, key ? 'Found (' + key.slice(0,12) + '…)' : 'MISSING — open ⚙ Settings and paste your key');
 
-    // Test 2: corsproxy.io (Yahoo Finance proxy)
-    try {
-      const r = await fetch('https://corsproxy.io/?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { signal: AbortSignal.timeout(8000) });
-      const d = await r.json();
-      check('Market data (corsproxy.io)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
-    } catch(e) { check('Market data (corsproxy.io)', false, e?.message || 'Failed'); }
-
-    // Test 3: allorigins.win fallback
+    // Test 2: allorigins.win (primary proxy)
     try {
       const r = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { signal: AbortSignal.timeout(8000) });
       const d = await r.json();
-      check('Market data (allorigins fallback)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
-    } catch(e) { check('Market data (allorigins fallback)', false, e?.message || 'Failed'); }
+      check('Market data (allorigins.win)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
+    } catch(e) { check('Market data (allorigins.win)', false, e?.message || 'Failed'); }
+
+    // Test 3: thingproxy fallback
+    try {
+      const r = await fetch('https://thingproxy.freeboard.io/fetch/https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d', { signal: AbortSignal.timeout(8000) });
+      const d = await r.json();
+      check('Market data (thingproxy fallback)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
+    } catch(e) { check('Market data (thingproxy fallback)', false, e?.message || 'Failed'); }
 
     // Test 4: Netlify function reachable
     try {

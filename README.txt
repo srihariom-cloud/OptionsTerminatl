@@ -1,43 +1,36 @@
-# Trade-with-Us — Deploy to Netlify
+# Trade-with-Us App — Netlify Deploy Guide
 
-## IMPORTANT: Two separate issues explained
-
-### Issue 1 — "Buy a domain" prompt
-This is just Netlify asking if you want a custom domain.
-✅ Simply DISMISS/SKIP it — your app already has a FREE URL like:
-   https://random-name-12345.netlify.app
-   You do NOT need to buy anything.
-
-### Issue 2 — App running locally instead of on Netlify
-Drag-and-drop does NOT support serverless functions (the Claude API proxy).
-Use the GitHub method below for full functionality.
+## Why Netlify?
+Browsers block direct calls to `api.anthropic.com` from local HTML files (CORS policy).
+This app uses a tiny Netlify serverless function as a secure proxy — your API key
+lives in Netlify's environment variables, never in the HTML.
 
 ---
 
-## Best Deploy Method: GitHub + Netlify (5 min, free)
+## Deploy in 3 Steps (~5 minutes, free forever)
 
-### Step 1 — Put files on GitHub
-1. Go to https://github.com/new
-2. Create repo (name it anything, set Public) → click Create
-3. Click "uploading an existing file"
-4. Unzip this ZIP and upload ALL files keeping the folder structure:
-     index.html              (at root)
-     netlify.toml            (at root)
-     netlify/functions/claude.js   (in subfolder)
-5. Click "Commit changes"
+### Step 1 — Create a free Netlify account
+Go to https://netlify.com and sign up (free tier is plenty).
 
-### Step 2 — Connect Netlify to GitHub
+### Step 2 — Deploy via Drag & Drop
 1. Go to https://app.netlify.com
-2. Click "Add new site" → "Import an existing project"
-3. Click "Deploy with GitHub" → authorize → select your repo
-4. Build settings: leave EVERYTHING blank
-5. Click "Deploy site"
-6. In ~30 seconds you get: https://amazing-fox-123.netlify.app ✅
+2. Scroll to the bottom of the page — you'll see a drag-and-drop zone:
+   **"Want to deploy a new site without connecting to Git? Drag and drop your site output folder here"**
+3. Unzip this file and **drag the entire folder** (`trade_netlify/`) into that box
+4. Netlify will deploy instantly and give you a URL like `https://amazing-name-123.netlify.app`
 
-### Step 3 — Add your Anthropic API Key
-1. Netlify dashboard → your site → "Site configuration" (left sidebar)
-2. "Environment variables" (left sidebar) → "Add a variable"
-3. Key: ANTHROPIC_API_KEY   Value: sk-ant-api03-...
-4. Save → Deploys tab → "Trigger deploy" → "Deploy site"
+### Step 3 — Add your Anthropic API Key (optional but recommended)
+This lets the app work without entering your key each time:
+1. In Netlify dashboard → your site → **Site configuration → Environment variables**
+2. Click **Add a variable**
+3. Key: `ANTHROPIC_API_KEY`  Value: `sk-ant-api03-...` (your key)
+4. Click Save, then **Deploys → Trigger deploy → Deploy site** to pick it up
 
-Your app is now live at your .netlify.app URL — works on any browser/device!
+**Alternatively:** Skip Step 3 entirely — just paste your key in the app's ⚙ Settings panel each session. It saves to your browser's localStorage automatically.
+
+---
+
+## Your app URL
+After deploy: `https://your-site-name.netlify.app`
+
+Bookmark it — works on any device, any browser, no installation needed.
