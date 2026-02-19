@@ -4500,41 +4500,54 @@ async function populateHotWatchlist() {
   area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 1/3: Fetching live price data for universe…</div>`;
 
   try {
-    const universe = document.getElementById('hotScanUniverse')?.value || 'sp500';
+    const universe = document.getElementById('hotScanUniverse')?.value || 'liquid_leaders';
     const maxPlays = parseInt(document.getElementById('hotMaxPlays')?.value || '10');
     const uwKey = document.getElementById('uwApiKey')?.value?.trim() || '';
-    const tickers = SCAN_UNIVERSES[universe] || SCAN_UNIVERSES.sp500;
+    const tickers = SCAN_UNIVERSES[universe] || SCAN_UNIVERSES.liquid_leaders;
+    const sample = tickers.slice(0, 40);
 
-    // Step 1: Fetch price data for a sample of tickers from Yahoo Finance
-    const sample = tickers.slice(0, 40); // fetch up to 40 for broader signal
-    area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 1/3: Fetching live price + volume data for ${sample.length} tickers across all sectors…</div>`;
+    // ── Step 1: Price data ────────────────────────────────────────────────
+    area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 1/3: Fetching live price data for ${sample.length} tickers…</div>`;
+    let priceData;
+    try {
+      priceData = await fetchBatchPrices(sample);
+    } catch(e) {
+      throw new Error('Step 1 failed (price fetch): ' + (e?.message || e));
+    }
 
-    const priceData = await fetchBatchPrices(sample);
+    const tickerCount = Object.keys(priceData).length;
+    if (tickerCount === 0) {
+      throw new Error('Step 1 failed: Could not load any price data. All market data proxies are blocked. Try opening the app on a different network or browser.');
+    }
 
-    area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 2/3: ${uwKey ? 'Fetching Unusual Whales options flow…' : 'Analyzing market structure with Claude AI…'}</div>`;
-
-    // Step 2: Try UW if key provided, else skip
+    // ── Step 2: Optional Unusual Whales flow ──────────────────────────────
+    area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 2/3: ${uwKey ? 'Fetching Unusual Whales flow…' : `Got data for ${tickerCount} tickers — asking Claude AI…`}</div>`;
     let uwFlowSummary = '';
     if (uwKey) {
       uwFlowSummary = await fetchUnusualWhalesFlow(uwKey);
     }
 
-    area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 3/3: Generating play theses with Claude AI…</div>`;
+    // ── Step 3: Claude AI ─────────────────────────────────────────────────
+    area.innerHTML = `<div class="hotLoadingMsg"><div class="dot"></div> Step 3/3: Generating ${maxPlays} plays with Claude AI…</div>`;
+    let plays;
+    try {
+      plays = await generatePlaysWithClaude(priceData, universe, maxPlays, uwFlowSummary);
+    } catch(e) {
+      throw new Error('Step 3 failed (Claude AI): ' + (e?.message || e));
+    }
 
-    // Step 3: Ask Claude AI to generate the watchlist
-    const plays = await generatePlaysWithClaude(priceData, universe, maxPlays, uwFlowSummary);
     hotWatchlistResults = plays;
-
     renderHotResults(plays);
     addAllRow.style.display = plays.length ? 'block' : 'none';
 
   } catch(err) {
     const msg = err?.message || String(err) || 'Unknown error';
-    const isNetwork = msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('networkerror') || msg.toLowerCase().includes('load failed') || msg.toLowerCase().includes('type error') || err instanceof TypeError;
-    const hint = isNetwork
-      ? ' <br><small style="opacity:.7">Network error — make sure the app is hosted on Netlify (not opened as a local file). See the README for setup instructions.</small>'
-      : '';
-    area.innerHTML = `<div class="hotEmptyMsg">⚠️ ${escapeHtml(msg)}${hint}</div>`;
+    area.innerHTML = `<div class="hotEmptyMsg" style="line-height:1.7">
+      ⚠️ <b>${escapeHtml(msg)}</b>
+      <br><br>
+      <button onclick="runDiagnostics()" style="padding:7px 14px;border-radius:7px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-size:13px">🔍 Run Diagnostics</button>
+      <span style="font-size:12px;color:var(--muted);margin-left:10px">Click to test what's actually failing</span>
+    </div>`;
   }
 
   btn.classList.remove('loading');
@@ -5078,6 +5091,64 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
       });
     }
   });
+
+
+  // ── DIAGNOSTICS ────────────────────────────────────────────────────────────
+  async function runDiagnostics() {
+    const area = document.getElementById('hotResultsArea');
+    const results = [];
+    const check = (label, ok, detail) => {
+      results.push({ label, ok, detail });
+      area.innerHTML = results.map(r => `
+        <div style="padding:6px 10px;margin:4px 0;border-radius:6px;background:${r.ok?'#16a34a18':'#dc262618'};border:1px solid ${r.ok?'#16a34a40':'#dc262640'};font-size:13px">
+          ${r.ok ? '✅' : '❌'} <b>${r.label}</b>${r.detail ? ` — <span style="opacity:.8">${r.detail}</span>` : ''}
+        </div>
+      `).join('') + '<div style="font-size:12px;color:var(--muted);margin-top:8px">Running checks…</div>';
+    };
+
+    area.innerHTML = '<div style="font-size:13px;color:var(--muted)">🔍 Running diagnostics…</div>';
+
+    // Test 1: API key present
+    const key = getApiKey();
+    check('Anthropic API key', !!key, key ? 'Found (' + key.slice(0,12) + '…)' : 'MISSING — open ⚙ Settings and paste your key');
+
+    // Test 2: corsproxy.io (Yahoo Finance proxy)
+    try {
+      const r = await fetch('https://corsproxy.io/?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { signal: AbortSignal.timeout(8000) });
+      const d = await r.json();
+      check('Market data (corsproxy.io)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
+    } catch(e) { check('Market data (corsproxy.io)', false, e?.message || 'Failed'); }
+
+    // Test 3: allorigins.win fallback
+    try {
+      const r = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { signal: AbortSignal.timeout(8000) });
+      const d = await r.json();
+      check('Market data (allorigins fallback)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
+    } catch(e) { check('Market data (allorigins fallback)', false, e?.message || 'Failed'); }
+
+    // Test 4: Netlify function reachable
+    try {
+      const r = await fetch('/.netlify/functions/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-anthropic-key': key || 'test' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const txt = await r.text();
+      if (r.status === 401) check('Netlify Claude proxy', false, 'Reachable but no API key set in Netlify env vars — paste key in ⚙ Settings instead');
+      else if (r.status === 404) check('Netlify Claude proxy', false, 'Function not found — app may not be deployed on Netlify (running locally?)');
+      else if (r.ok) check('Netlify Claude proxy', true, 'Working — Claude API reachable');
+      else check('Netlify Claude proxy', false, 'HTTP ' + r.status + ': ' + txt.slice(0,120));
+    } catch(e) { check('Netlify Claude proxy', false, e?.message || 'Failed'); }
+
+    // Final summary
+    const allOk = results.every(r => r.ok);
+    area.innerHTML += `<div style="margin-top:12px;padding:10px;border-radius:8px;background:var(--card);border:1px solid var(--cardBorder);font-size:13px">
+      ${allOk
+        ? '✅ <b>All systems working!</b> Try the Populate button again.'
+        : '⚠️ Some checks failed. Fix the red items above, then retry. If the Netlify proxy shows "Function not found", the app is running as a local file — deploy to Netlify first.'}
+    </div>`;
+  }
 
 </script>
 
