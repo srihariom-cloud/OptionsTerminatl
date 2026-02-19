@@ -4108,40 +4108,20 @@ async function fetchMarketData(){
   if(!grid) return;
 
   try{
-    // Fetch market snapshot using multi-proxy helper (Safari-safe)
-    const mktSyms = [['SPY','SPY'],['QQQ','QQQ'],['IWM','IWM'],['%5EVIX','VIX']];
-    const mktResults = await Promise.allSettled(mktSyms.map(async ([sym, label]) => {
-      const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=2d`;
-      const proxies = [
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(yfUrl)}`,
-        `https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`,
-        `https://corsproxy.io/?${encodeURIComponent(yfUrl)}`,
-        `https://proxy.cors.sh/${yfUrl}`,
-      ];
-      let d = null;
-      for (const url of proxies) {
-        try {
-          const r = await Promise.race([
-            fetch(url, { mode: 'cors', cache: 'no-cache' }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
-          ]);
-          if (!r.ok) continue;
-          const text = await r.text();
-          let parsed; try { parsed = JSON.parse(text); } catch { continue; }
-          if (parsed?.contents) { try { parsed = JSON.parse(parsed.contents); } catch { continue; } }
-          if (parsed?.chart?.result?.[0]) { d = parsed; break; }
-        } catch (_) {}
-      }
-      const q = d?.chart?.result?.[0];
-      if (!q) throw new Error('No data');
-      const c = q.indicators?.quote?.[0]?.close || [];
-      const last = c[c.length-1];
-      const prev = c[c.length-2];
-      const chg = (last && prev) ? +(last-prev).toFixed(2) : 0;
-      const chgPct = (last && prev) ? +(((last-prev)/prev)*100).toFixed(2) : 0;
-      return { sym: label, price: last ? +last.toFixed(2) : null, chg, chgPct };
-    }));
-    const cards = mktResults.filter(r => r.status === 'fulfilled').map(r => r.value).filter(Boolean);
+    // Fetch market snapshot via Netlify prices function
+    const mktResp = await Promise.race([
+      fetch('/.netlify/functions/prices?tickers=SPY,QQQ,IWM,%5EVIX'),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000))
+    ]);
+    const mktJson = await mktResp.json();
+    const mktRaw = mktJson.results || {};
+    // Remap VIX symbol and build display cards
+    const mktOrder = ['SPY','QQQ','IWM','%5EVIX'];
+    const cards = mktOrder.map(sym => {
+      const d = mktRaw[sym] || mktRaw['%5EVIX'];
+      if (!sym || !d?.last) return null;
+      return { sym: sym === '%5EVIX' ? 'VIX' : sym, price: d.last, chg: d.chg5d || 0, chgPct: d.chg5d || 0 };
+    }).filter(Boolean);
     const data = { results: cards };
 
     if(cards.length === 0){
@@ -4562,69 +4542,16 @@ async function populateHotWatchlist() {
   btn.disabled = false;
 }
 
-// ── Yahoo Finance fetcher with multiple proxies ──
-async function yfFetch(sym) {
-  const base = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=10d`;
-  const proxies = [
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(base)}`,
-    `https://api.allorigins.win/get?url=${encodeURIComponent(base)}`,
-    `https://corsproxy.io/?${encodeURIComponent(base)}`,
-    `https://proxy.cors.sh/${base}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(base)}`,
-  ];
-  for (const url of proxies) {
-    try {
-      const r = await Promise.race([
-        fetch(url, { mode: 'cors', cache: 'no-cache' }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
-      ]);
-      if (!r.ok) continue;
-      const text = await r.text();
-      // allorigins /get wraps in {contents: "..."}
-      let d;
-      try { d = JSON.parse(text); } catch { continue; }
-      if (d?.contents) { try { d = JSON.parse(d.contents); } catch { continue; } }
-      if (d?.chart?.result?.[0]) return d;
-    } catch (_) {}
-  }
-  return null;
-}
-
+// ── Price fetcher — routes through Netlify function (no CORS issues) ──
 async function fetchBatchPrices(tickers) {
-  const results = {};
-  await Promise.allSettled(tickers.map(async sym => {
-    try {
-      const d = await yfFetch(sym);
-      if (!d) return;
-      const q = d.chart.result[0];
-      const closes  = q.indicators?.quote?.[0]?.close  || [];
-      const volumes = q.indicators?.quote?.[0]?.volume || [];
-      const meta    = q.meta || {};
-      const last    = closes[closes.length - 1];
-      const prev5   = closes[closes.length - 6] || closes[0];
-      const chg5d   = (last && prev5) ? +((( last - prev5) / prev5) * 100).toFixed(2) : null;
-      const avgVol  = volumes.length ? Math.round(volumes.reduce((a,b)=>a+(b||0),0)/volumes.length) : null;
-      const lastVol = volumes[volumes.length - 1];
-      const volRatio = (avgVol && lastVol) ? +(lastVol / avgVol).toFixed(2) : null;
-      const recentCloses = closes.slice(-6).filter(Boolean);
-      const atr5 = recentCloses.length > 1
-        ? recentCloses.slice(1).reduce((s,c,i) => s + Math.abs(c - recentCloses[i]), 0) / (recentCloses.length - 1)
-        : 0;
-      const atrPct = last && atr5 ? +((atr5 / last) * 100).toFixed(2) : null;
-      results[sym] = {
-        sym,
-        last:        last  ? +last.toFixed(2) : null,
-        chg5d, volRatio, avgVol, lastVol, atrPct,
-        high52:      meta.fiftyTwoWeekHigh ? +meta.fiftyTwoWeekHigh.toFixed(2) : null,
-        low52:       meta.fiftyTwoWeekLow  ? +meta.fiftyTwoWeekLow.toFixed(2)  : null,
-        distFrom52h: (last && meta.fiftyTwoWeekHigh)
-          ? +(((meta.fiftyTwoWeekHigh - last) / meta.fiftyTwoWeekHigh) * 100).toFixed(2) : null,
-        distFrom52l: (last && meta.fiftyTwoWeekLow)
-          ? +(((last - meta.fiftyTwoWeekLow) / meta.fiftyTwoWeekLow) * 100).toFixed(2) : null,
-      };
-    } catch (_) {}
-  }));
-  return results;
+  const url = '/.netlify/functions/prices?tickers=' + tickers.join(',');
+  const r = await Promise.race([
+    fetch(url),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('Price fetch timed out after 20s')), 20000))
+  ]);
+  if (!r.ok) throw new Error('Price fetch failed: HTTP ' + r.status);
+  const data = await r.json();
+  return data.results || {};
 }
 
 async function fetchUnusualWhalesFlow(apiKey) {
@@ -5135,27 +5062,16 @@ document.getElementById('playTicker')?.addEventListener('input', e => {
     const key = getApiKey();
     check('Anthropic API key', !!key, key ? 'Found (' + key.slice(0,12) + '…)' : 'MISSING — open ⚙ Settings and paste your key');
 
-    // Test 2: allorigins.win (primary proxy)
+    // Test 2: Netlify prices function
     try {
       const r = await Promise.race([
-        fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d'), { mode:'cors' }),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after 12s')),12000))
-      ]);
-      const text = await r.text();
-      let d; try { d = JSON.parse(text); } catch { d = null; }
-      if (d?.contents) { try { d = JSON.parse(d.contents); } catch { d = null; } }
-      check('Market data (allorigins.win)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
-    } catch(e) { check('Market data (allorigins.win)', false, e?.message || 'Failed'); }
-
-    // Test 3: cors.sh fallback
-    try {
-      const r = await Promise.race([
-        fetch('https://proxy.cors.sh/https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=2d', { mode:'cors' }),
+        fetch('/.netlify/functions/prices?tickers=SPY'),
         new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after 12s')),12000))
       ]);
       const d = await r.json();
-      check('Market data (proxy.cors.sh)', !!d?.chart?.result?.[0], r.ok ? 'Working' : 'HTTP ' + r.status);
-    } catch(e) { check('Market data (proxy.cors.sh)', false, e?.message || 'Failed'); }
+      const ok = !!d?.results?.SPY?.last;
+      check('Market data (Netlify /prices)', ok, ok ? `SPY $${d.results.SPY.last}` : (r.status === 404 ? 'Function not found — prices.js not deployed' : 'HTTP ' + r.status));
+    } catch(e) { check('Market data (Netlify /prices)', false, e?.message || 'Failed'); }
 
     // Test 4: Netlify function reachable
     try {
